@@ -14,14 +14,16 @@ from transformers import AdamW, get_linear_schedule_with_warmup
 from ivadomed.losses import AdapWingLoss, DiceLoss, GeneralizedDiceLoss, FocalTverskyLoss
 
 from datasets import MSSeg1Dataset, MSSeg2Dataset
-from utils import split_dataset, binary_accuracy, set_seeds
-from models import TestModel, ModelConfig, TransUNet3D, ModifiedUNet3D
+from utils.utils import split_dataset, binary_accuracy, set_seeds ##jenny
+from nets.models import TestModel, ModelConfig, TransUNet3D, ModifiedUNet3D
+print(torch.__version__)
 
+from torch.amp import GradScaler
 parser = argparse.ArgumentParser(description='Script for training custom models for MSSeg2 Challenge 2021.')
 
 # Arguments for model, data, and training
 parser.add_argument('-e', '--only_eval', default=False, action='store_true',
-                    help='Only do evaluation, i.e. skip training!')
+                     help='Only do evaluation, i.e. skip training!')
 parser.add_argument('-id', '--model_id', default='transunet', type=str,
                     help='Model ID to-be-used for saving the .pt saved model file')
 parser.add_argument('-m', '--model_type', choices=['transunet', 'unet', 'attentionunet'], default='transunet', type=str,
@@ -83,7 +85,7 @@ parser.add_argument('-c', '--continue_from_checkpoint', default=False, action='s
 parser.add_argument('-clp', '--continue_load_path', default=None, type=str,
                     help='Path to the trained .pt saved model file which we want to finetune / continue training on')
 parser.add_argument('-ls', '--load_strategy', choices=['only_encoder', 'all'], default='all',
-                    help='How to load the weights for a finetuning experiment or continuation / evaluation')
+                    help='How to load the weights for  fineatuning experiment or continuation / evaluation')
 parser.add_argument('-se', '--seed', default=42, type=int,
                     help='Set seeds for reproducibility')
 
@@ -96,7 +98,6 @@ parser.add_argument('--master_port', type=str, default='29500',
                     help='Port that master is listening on')
 
 args = parser.parse_args()
-
 
 # Explicitly enabling (only) dropout - will be used during validation and test phases (for MC Dropout)
 def enable_dropout(m):
@@ -130,14 +131,17 @@ def main_worker(rank, world_size):
     if not args.only_eval:
         print('Trained model will be saved to: %s' % os.path.join(args.save, '%s.pt' % model_id))
     else:
+        # hereeee
         print('Running Evaluation: (1) Loss metrics on validation set, and (2) ANIMA metrics on test set')
-        args.continue_from_checkpoint = True
+        # args.continue_from_checkpoint = False
 
     if args.continue_load_path is not None and not args.continue_from_checkpoint:
         raise ValueError('You need -c when you specify -clp!')
 
     if args.local_rank == -1:
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cpu")
+
     else:
         torch.cuda.set_device(rank)
         device = torch.device('cuda', rank)
@@ -173,8 +177,10 @@ def main_worker(rank, world_size):
         else:
             load_path = args.continue_load_path
 
+
         print('Loading learned weights from %s' % load_path)
-        state_dict = torch.load(load_path)
+        # state_dict = torch.load(load_path)
+        state_dict = torch.load(load_path, map_location=torch.device('cpu'))
         state_dict_ = deepcopy(state_dict)
 
         for param in state_dict:
@@ -186,22 +192,22 @@ def main_worker(rank, world_size):
                     state_dict_.pop(param)
                     continue
             # If weights don't match bw. pretrained model and new model, we'll have to rectify it
-            if not model.state_dict()[param.replace('module.', '')].shape == state_dict[param].shape:
-                print('WARNING: Weight shapes DONT match for param: ', param, '. Taking care of ' +
-                      'this by simply repeating weights along CHANNEL dimension! Stop the script ' +
-                      'now if this is not the intended effect.')
+            # if not model.state_dict()[param.replace('module.', '')].shape == state_dict[param].shape:
+            #     print('WARNING: Weight shapes DONT match for param: ', param, '. Taking care of ' +
+            #           'this by simply repeating weights along CHANNEL dimension! Stop the script ' +
+            #           'now if this is not the intended effect.')
 
-                # In the context of Modified3DUNet, we know that the issue arises because MSSeg2016
-                # dataset has one FLAIR input and hence the model has `in_channel=1`, whereas
-                # MSSeg2021 dataset has two FLAIR inputs (i.e. two TPs) and hence the model has
-                # `in_channel=2`. A similar problem is described here:
-                # https://discuss.pytorch.org/t/how-to-change-no-of-input-channels-to-a-pretrained-model/19379/2
-                # In this case, we will be repeating the weights of this specific parameter along
-                # the channel dimension and reshaping it to (F, C=2, 3, 3, 3) from
-                # (F, C=1, 3, 3, 3). What this means is: treat the two channels similarly to begin
-                # with. This only makes sense as both TPs are FLAIR inputs and there is no need to
-                # randomly initialize the other when we have learned features for one of them!
-                state_dict_[param] = state_dict_[param].repeat(1, 2, 1, 1, 1)
+            #     # In the context of Modified3DUNet, we know that the issue arises because MSSeg2016
+            #     # dataset has one FLAIR input and hence the model has `in_channel=1`, whereas
+            #     # MSSeg2021 dataset has two FLAIR inputs (i.e. two TPs) and hence the model has
+            #     # `in_channel=2`. A similar problem is described here:
+            #     # https://discuss.pytorch.org/t/how-to-change-no-of-input-channels-to-a-pretrained-model/19379/2
+            #     # In this case, we will be repeating the weights of this specific parameter along
+            #     # the channel dimension and reshaping it to (F, C=2, 3, 3, 3) from
+            #     # (F, C=1, 3, 3, 3). What this means is: treat the two channels similarly to begin
+            #     # with. This only makes sense as both TPs are FLAIR inputs and there is no need to
+            #     # randomly initialize the other when we have learned features for one of them!
+            #     state_dict_[param] = state_dict_[param].repeat(1, 2, 1, 1, 1)
 
             # Rename parameters to exclude the starting 'module.' string so they match
             # NOTE: We need this because of DataParallel saving parameters starting with 'module.'
@@ -331,11 +337,13 @@ def main_worker(rank, world_size):
 
     # Set scaler for mixed-precision training
     # NOTE: Check https://spell.ml/blog/mixed-precision-training-with-pytorch-Xuk7YBEAACAASJam
-    scaler = torch.cuda.amp.GradScaler()
+    # scaler = torch.amp.GradScaler()
+    scaler = GradScaler()
 
     # Train & Validate & Test Phases
     best_val_loss = float('inf')
     for i in tqdm(range(args.num_epochs), desc='Iterating over Epochs'):
+
         if not args.only_eval:
             # -------------------------------- TRAIN PHASE ------------------------------------
             model.train()
@@ -360,7 +368,8 @@ def main_worker(rank, world_size):
                 else:
                     x1, x2 = x1.unsqueeze(1), x2.unsqueeze(1)
 
-                with torch.cuda.amp.autocast():
+                # with torch.cuda.amp.autocast():
+                with torch.cuda.amp.autocast(enabled=False):
                     if cfg.aux_clf_task:
                         clf_y_hat, seg_y_hat = model(x1, x2)
                     else:
@@ -429,6 +438,7 @@ def main_worker(rank, world_size):
                         else:
                             x1, x2 = x1.unsqueeze(1), x2.unsqueeze(1)
 
+                        print(x1)
                         with torch.cuda.amp.autocast():
                             if cfg.aux_clf_task:
                                 clf_y_hat, seg_y_hat = model(x1, x2)
@@ -467,8 +477,9 @@ def main_worker(rank, world_size):
                         x1, x2 = x1.unsqueeze(2), x2.unsqueeze(2)
                     else:
                         x1, x2 = x1.unsqueeze(1), x2.unsqueeze(1)
-
-                    with torch.cuda.amp.autocast():
+                    
+                    # with torch.cuda.amp.autocast():
+                    with torch.cuda.amp.autocast(enabled=False):
                         if cfg.aux_clf_task:
                             clf_y_hat, seg_y_hat = model(x1, x2)
                         else:
@@ -477,7 +488,6 @@ def main_worker(rank, world_size):
                         seg_loss = seg_criterion(seg_y_hat, seg_y)
                         if cfg.aux_clf_task:
                             clf_loss = clf_criterion(clf_y_hat.permute(0, 2, 1), clf_y)
-
                     # Update metrics
                     val_epoch_losses['seg'] += seg_loss.item()
                     val_epoch_losses['soft_dice'] += dice_metric(seg_y_hat.detach(), seg_y.detach()).detach().item()
@@ -535,6 +545,7 @@ def main_worker(rank, world_size):
         # -------------------------------- TEST PHASE ------------------------------------
         # NOTE: Let's only perform the test phase when `only_eval` is specified!
         if args.only_eval:
+            print("You are in the args.only_eval")
             dataset.train = False
             if args.mc_dropout:
                 enable_dropout(model)   # enabling only dropout for the test phase
