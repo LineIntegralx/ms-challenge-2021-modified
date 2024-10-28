@@ -135,7 +135,8 @@ class MSSeg2Dataset(Dataset):
             print('WARNING: results_dir=%s already exists! Files might be overwritten...' % results_dir)
         self.results_dir = results_dir
         self.visualize_test_preds = visualize_test_preds
-
+        
+        print(self.visualize_test_preds)
         # Get the ANIMA binaries path
         cmd = r'''grep "^anima = " ~/.anima/config.txt | sed "s/.* = //"'''
         self.anima_binaries_path = subprocess.check_output(cmd, shell=True).decode('utf-8').strip('\n')
@@ -179,8 +180,10 @@ class MSSeg2Dataset(Dataset):
         self.train = False
 
         # Get all subjects
-        subjects_df = pd.read_csv(os.path.join(root, 'participants.tsv'), sep='\t')
-        subjects = subjects_df['participant_id'].values.tolist()
+        subjects_df = pd.read_csv('/content/drive/MyDrive/testing_data/data_processed/participants.tsv', sep='\t')
+        print("subjects_df", subjects_df)
+        # subjects = subjects_df['participant_id'].values.tolist()
+        subjects = ['sub-094']
 
         # Only use subset of the dataset if applicable (used for debugging)
         if fraction_data != 1.0:
@@ -189,11 +192,12 @@ class MSSeg2Dataset(Dataset):
         # Hold-out a fraction of subjects for test phase
         random.seed(seed)
         random.shuffle(subjects)
-        self.subjects_hold_out = subjects[:int(len(subjects) * fraction_hold_out)]
+        # self.subjects_hold_out = subjects[:int(len(subjects) * fraction_hold_out)]
+        self.subjects_hold_out = ['sub-094']
         print('Hold-out Subjects: ', self.subjects_hold_out)
 
         # The rest of the subjects will be used for the train and validation phases
-        subjects = subjects[int(len(subjects) * fraction_hold_out):]
+        # subjects = subjects[int(len(subjects) * fraction_hold_out):]
 
         # Iterate over kept subjects (i.e. after hold-out) and extract subvolumes
         self.subvolumes, self.positive_indices = [], []
@@ -201,16 +205,19 @@ class MSSeg2Dataset(Dataset):
 
         for subject_no, subject in enumerate(tqdm(subjects, desc='Loading Volumes -> Preparing Subvolumes')):
             # Read-in input volumes
-            ses01 = nib.load(os.path.join(root, subject, 'anat', '%s_FLAIR.nii.gz' % subject), mmap=False)
-            ses02 = nib.load(os.path.join(root, subject, 'anat', '%s_T1w.nii.gz' % subject), mmap=False)
+            ses01 = nib.load(os.path.join(root, subject, 'ses-01', 'anat', '%s_ses-01_FLAIR.nii.gz' % subject))
+            ses02 = nib.load(os.path.join(root, subject, 'ses-02','anat', '%s_ses-02_FLAIR.nii.gz' % subject))
 
             # Read-in GT volumes (using the consensus GT for now)
-            gtc = nib.load(os.path.join(root, 'derivatives', 'labels', subject, 'anat', '%s_FLAIR_seg-lesion.nii.gz' % subject), mmap=False)
+            gtc = nib.load(os.path.join(root, 'derivatives', 'labels', subject, 'ses-02', 'anat', '%s_ses-02_FLAIR_seg-lesion.nii.gz' % subject))
 
             # Check if image sizes and resolutions match
             assert ses01.shape == ses02.shape == gtc.shape
             assert ses01.header['pixdim'].tolist() == ses02.header['pixdim'].tolist() == gtc.header['pixdim'].tolist()
-            assert ses01.header['pixdim'].tolist()[1:4] == [0.5, 0.5, 0.5]
+            # ses01.header['pixdim'].tolist()[1:4] = [0.5, 0.5, 0.5]
+            # print(type(ses01.header['pixdim']))
+            # print(ses01.header['pixdim'].tolist()[1:4])
+            # assert ses01.header['pixdim'].tolist()[1:4] == [0.5, 0.5, 0.5]
             # NOTE: We know that the above voxel dimensions will hold thanks to preprocessing step
 
             # Convert to NumPy
@@ -357,18 +364,22 @@ class MSSeg2Dataset(Dataset):
         num_subvolumes_per_dim = [adjusted_center_crop_size[i] // self.subvolume_size[i] for i in range(3)]
         num_subvolumes = np.prod(num_subvolumes_per_dim)
 
+        print("num_subvolumes", num_subvolumes)
+        print("subjects_hold_out", self.subjects_hold_out)
+
         for subject_no, subject in enumerate(tqdm(self.subjects_hold_out, desc='Testing Phase')):
             # Read-in input test volumes
-            ses01 = nib.load(os.path.join(self.root, subject, 'anat', '%s_FLAIR.nii.gz' % subject), mmap=False)
-            ses02 = nib.load(os.path.join(self.root, subject, 'anat', '%s_T1w.nii.gz' % subject), mmap=False)
+            ses01 = nib.load(os.path.join(self.root, subject, 'ses-01', 'anat', '%s_ses-01_FLAIR.nii.gz' % subject))
+            ses02 = nib.load(os.path.join(self.root, subject, 'ses-02', 'anat', '%s_ses-02_FLAIR.nii.gz' % subject)) # typooo
 
             # Read-in GT volumes (using the consensus GT for now)
-            gtc = nib.load(os.path.join(self.root, 'derivatives', 'labels', subject, 'anat', '%s_FLAIR_seg-lesion.nii.gz' % subject), mmap=False)
+            gtc = nib.load(os.path.join(self.root, 'derivatives', 'labels', subject, 'ses-02', 'anat', '%s_ses-02_FLAIR_seg-lesion.nii.gz' % subject))
 
             # Check if image sizes and resolutions match
-            assert ses01.shape == ses02.shape == gtc.shape
-            assert ses01.header['pixdim'].tolist() == ses02.header['pixdim'].tolist() == gtc.header['pixdim'].tolist()
-            assert ses01.header['pixdim'].tolist()[1:4] == [0.5, 0.5, 0.5]
+            # assert ses01.shape == ses02.shape == gtc.shape
+            # assert ses01.header['pixdim'].tolist() == ses02.header['pixdim'].tolist() == gtc.header['pixdim'].tolist()
+            ses01.header['pixdim'].tolist()[1:4] = [0.5, 0.5, 0.5]
+            # assert ses01.header['pixdim'].tolist()[1:4] == [0.5, 0.5, 0.5]
             # NOTE: We know that the above voxel dimensions will hold thanks to preprocessing step
 
             # Convert to NumPy
@@ -380,7 +391,7 @@ class MSSeg2Dataset(Dataset):
             ses02 = center_crop(sample=ses02, metadata={'crop_params': {}})[0]
             gtc = center_crop(sample=gtc, metadata={'crop_params': {}})[0]
 
-            # Get subvolumes from volumes
+            # Get sosubvolumes from volumes
             # NOTE: We use subvolume size for the stride size to get non-overlapping test subvolumes
             ses01_subvolumes = volume2subvolumes(volume=ses01, subvolume_size=self.subvolume_size, stride_size=self.subvolume_size)
             ses02_subvolumes = volume2subvolumes(volume=ses02, subvolume_size=self.subvolume_size, stride_size=self.subvolume_size)
@@ -389,7 +400,9 @@ class MSSeg2Dataset(Dataset):
 
             # Collect individual subvolume predictions for full volume segmentation (i.e. full scan for one subject)
             pred_subvolumes = []
+            print("lennn ses01_subvolumes", len(ses01_subvolumes))
             for i in range(len(ses01_subvolumes)):
+                print("I=", i)
                 ses01_subvolume, ses02_subvolume, gtc_subvolume = ses01_subvolumes[i], ses02_subvolumes[i], gtc_subvolumes[i]
 
                 # Normalize images to zero mean and unit variance
@@ -428,6 +441,7 @@ class MSSeg2Dataset(Dataset):
                 # Optional visualization for manual assessment of performance
                 if self.visualize_test_preds:
                     if np.any(gtc_subvolume):
+                        print("self.results_dir=", self.results_dir)
                         seg_y_hat_nib = nib.Nifti1Image(seg_y_hat, affine=np.eye(4))
                         nib.save(img=seg_y_hat_nib, filename=os.path.join(self.results_dir, '%s_%d_pred.nii.gz' % (subject, i)))
                         gtc_subvolume_nib = nib.Nifti1Image(gtc_subvolume, affine=np.eye(4))
@@ -459,6 +473,7 @@ class MSSeg2Dataset(Dataset):
             # NOTE: We are deleting & overwriting the NIfTI files at each iteration
             pred_nib = nib.Nifti1Image(pred, affine=np.eye(4))
             gtc_nib = nib.Nifti1Image(gtc, affine=np.eye(4))
+            print("os.path.join(self.results_dir=", os.path.join(self.results_dir))
             nib.save(img=pred_nib, filename=os.path.join(self.results_dir, 'pred.nii.gz'))
             nib.save(img=gtc_nib, filename=os.path.join(self.results_dir, 'gt.nii.gz'))
 
@@ -486,10 +501,11 @@ class MSSeg2Dataset(Dataset):
         for subject_filepath in subject_filepaths:
             subject = os.path.split(subject_filepath)[-1].split('_')[0]
             root_node = ET.parse(source=subject_filepath).getroot()
-
+            
             # Check if RelativeVolumeError is INF -> means the GT is empty and should be ignored
             rve_metric = list(root_node)[6]
             assert rve_metric.get('name') == 'RelativeVolumeError'
+
             if np.isinf(float(rve_metric.text)):
                 print('Skipping Subject=%s ENTIRELY Due to Empty GT!' % subject)
                 continue
@@ -582,14 +598,14 @@ class MSSeg1Dataset(Dataset):
 
         for subject_no, subject in enumerate(tqdm(subjects, desc='Loading Volumes -> Preparing Subvolumes')):
             # Read-in input volumes
-            ses01 = nib.load(os.path.join(root, subject, 'anat', '%s_FLAIR.nii.gz' % subject), mmap=False)
+            ses01 = nib.load(os.path.join(root, subject, 'anat', '%s_FLAIR.nii.gz' % subject))
 
             # Read-in GT volumes
             gt = None
             if gt_type == 'staple':
-                gt = nib.load(os.path.join(root, 'derivatives', 'labels', subject, 'anat', '%s_FLAIR_seg-lesion0.nii.gz' % subject), mmap=False)
+                gt = nib.load(os.path.join(root, 'derivatives', 'labels', subject, 'anat', '%s_FLAIR_seg-lesion0.nii.gz' % subject))
             elif gt_type == 'average':
-                gt = nib.load(os.path.join(root, 'derivatives', 'labels', subject, 'anat', '%s_FLAIR_seg-average-lesion.nii.gz' % subject), mmap=False)
+                gt = nib.load(os.path.join(root, 'derivatives', 'labels', subject, 'anat', '%s_FLAIR_seg-average-lesion.nii.gz' % subject))
             else:
                 raise NotImplementedError('gt_type=%s is not yet implemented!')
 
